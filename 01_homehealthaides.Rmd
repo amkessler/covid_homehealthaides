@@ -1,0 +1,235 @@
+---
+title: "Home Healthcare Aides"
+author: "Aaron Kessler"
+date: ""
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(janitor)
+library(readxl)
+library(writexl)
+library(kableExtra)
+library(formattable)
+# library(tigris)
+# library(sf)
+# library(tmap)
+# library(tmaptools)
+
+
+#load saved processed data files from step 00
+states_allrecs <- readRDS("processed_data/states_allrecs.rds")
+msa_allrecs <- readRDS("processed_data/msa_allrecs.rds")
+national_allrecs <- readRDS("processed_data/national_allrecs.rds")
+
+#limit to just the 50 states and DC
+states_allrecs <- states_allrecs %>% 
+  filter(!st %in% c("GU", "VI", "PR"))
+
+msa_allrecs <- msa_allrecs %>% 
+  filter(!prim_state %in% c("GU", "VI", "PR"))
+
+
+# pull out just home health aides (code 31-1011)
+national_homehealthaides <- national_allrecs %>% 
+  filter(occ_code == "31-1011")
+
+states_homehealthaides <- states_allrecs %>% 
+  filter(occ_code == "31-1011") %>% 
+  select(st, state, tot_emp, jobs_1000)
+
+msa_homehealthaides <- msa_allrecs %>% 
+  filter(occ_code == "31-1011") %>% 
+  select(area_name, tot_emp, jobs_1000)
+
+
+### --------------------------------------------------------------------
+```
+
+
+```{r, echo=FALSE}
+#### bring in combined census/covid case state-level data from step 00
+joined_state_pops_cases <- readRDS("processed_data/joined_state_pops_cases.rds")
+
+#join together with bls state-level dataframe
+states_homehealthaides <- inner_join(states_homehealthaides, joined_state_pops_cases, by = c("st" = "state")) %>% 
+  select(
+   geoid, st, state_name, everything(), -state
+  )
+
+#calculate rankings
+states_homehealthaides <- states_homehealthaides %>% 
+  mutate(
+    rank_jobs_per1000 = min_rank(desc(jobs_1000)),
+    rank_cases_per100k = min_rank(desc(cases_per_100k)),
+    rank_diff = (rank_jobs_per1000 - rank_cases_per100k)
+  ) 
+
+#add measure for home health aides per covid case, and associated rankings
+states_homehealthaides <- states_homehealthaides %>% 
+  mutate(
+    jobs_per_case = (casecount / tot_emp),
+    rank_jobs_per_case = min_rank(desc(jobs_per_case)),
+    rank_totalcases = min_rank(desc(casecount)),
+    ratiotest = cases_per_100k / jobs_1000,
+  )
+
+states_homehealthaides
+
+#export to excel for sharing
+write_xlsx(states_homehealthaides, "output/states_homehealthaides.xlsx")
+
+
+```
+
+
+The [Bureau of Labor Statistics](https://www.bls.gov/oes/tables.html) puts out extensive data on the workforce, including details down to the state and metro level. (The most recent localized data is from 2018, that's what we'll use here.)  
+  
+We'll use the occupation of "Home Health Aides" for this analysis. More information on the category can be found [here](https://www.bls.gov/ooh/healthcare/home-health-aides-and-personal-care-aides.htm).  
+  
+Nationally, about 800,000 people work as such aides. They generally make little money despite the importance of their jobs in keeping people alive - averaging about $12/hr as of 2018.
+
+<br>
+
+## State and local level workforces 
+
+Now let's analyze the BLS data more granularly to explore how different states compare with each other.  
+  
+Since areas with the highest populations naturally tend to have more workers of any type, including those at restaurants and bars, we'll account for that by using a rate of "jobs per 1,000 workers" so it's more apples-to-apples. E.g. for each 1,000 workers in a state or metro area, how many are home health aides. 
+  
+### States
+
+Which states have the **lowest** share of their workforce per 1,000 workers as home health aides? (Shown below in the *jobs_1000* column).  
+
+```{r, echo=FALSE}
+
+states_homehealthaides %>%
+  arrange(jobs_1000) %>% 
+  head(15) %>% 
+  kable(format.args = list(big.mark = ",")) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left") %>% 
+  column_spec(3, background = "yellow")
+
+```
+
+Which states have the **highest** share of their workforce per 1,000 workers?
+
+```{r, echo=FALSE}
+
+states_homehealthaides %>%
+  arrange(desc(jobs_1000)) %>% 
+  head(15) %>% 
+  kable(format.args = list(big.mark = ",")) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left") %>% 
+  column_spec(3, background = "yellow")
+
+```
+
+What's the range in values we're talking about states having by that measure: 
+
+```{r, echo=FALSE}
+
+states_homehealthaides %>% 
+  summarise(minvalue = min(jobs_1000),
+            maxvalue = max(jobs_1000)) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+
+```
+
+That's a pretty large difference between the worst and the best.  
+Let's take a quick look at what the distribution looks like with a historgram. 
+  
+As we can see below, the distribtuion skews left, meaning most states have very few home health aides as a percentage of their workforces, while a smaller number of state have significantly more.
+
+```{r, echo=FALSE}
+
+ggplot(states_homehealthaides, aes(x = jobs_1000)) +
+  geom_histogram() +
+  geom_vline(aes(xintercept=mean(jobs_1000)),
+            color="darkblue", linetype="dashed", size=1)
+
+
+```
+
+
+### Metro Areas
+
+Now we'll do the same thing but for **Metropolitan Statistical Areas (MSAs)**...
+
+Which metro areas have the **lowest** share of their workforce per 1,000 workers as home health aides? 
+
+```{r, echo=FALSE}
+
+msa_homehealthaides %>%
+  arrange(jobs_1000) %>% 
+  head(15) %>% 
+  kable(format.args = list(big.mark = ",")) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left") %>% 
+  column_spec(3, background = "yellow")
+
+```
+
+Which metro areas have the **lowest** share of their workforce per 1,000 workers? 
+
+```{r, echo=FALSE}
+
+msa_homehealthaides %>%
+  arrange(desc(jobs_1000)) %>% 
+  head(15) %>% 
+  kable(format.args = list(big.mark = ",")) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left") %>% 
+  column_spec(3, background = "yellow")
+
+```
+
+
+
+What's the range in values we're talking about states having by that measure: 
+
+```{r, echo=FALSE}
+
+msa_homehealthaides %>% 
+  summarise(minvalue = min(jobs_1000, na.rm = TRUE),
+            maxvalue = max(jobs_1000, na.rm = TRUE)) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+
+```
+
+Once again, that's a pretty large difference between the worst and the best.  
+
+As we can see below, the distribtuion skews way left, meaning many areas have very few home health aides as a percentage of their workforces, while a smaller number have more.
+
+```{r, echo=FALSE}
+
+msa_homehealthaides %>% 
+  filter(!is.na(jobs_1000)) %>% 
+  ggplot(aes(x = jobs_1000)) +
+    geom_histogram() +
+    geom_vline(aes(xintercept=mean(jobs_1000)),
+            color="darkblue", linetype="dashed", size=1)
+
+
+```
+
+
+<br>
+
+#### Saving to a file
+
+Finally, we'll save the underlying data in a single Excel file for easy sharing, in case you want to explore the entire list of all states/metros included here.
+
+```{r}
+
+sheets <- list("states_homehealthaides" = states_homehealthaides,
+              "msa_homehealthaides" = msa_homehealthaides,
+              "national_homehealthaides" = national_homehealthaides)
+  
+write_xlsx(sheets, "output/exported_homehealthaides.xlsx")
+
+
+```
